@@ -6,7 +6,7 @@
 
 A CLI tool called `reentbot` that:
 1. Takes a directory of Solidity smart contracts as input
-2. Spins up a Docker container pre-loaded with audit tools (Slither, Foundry, Echidna, Medusa, Halmos)
+2. Spins up a Docker container pre-loaded with audit tools (Slither, Foundry, Echidna, Medusa, Halmos) and build tooling (Node.js, npm, yarn, jq, tree)
 3. Runs an LLM-powered agent loop that autonomously analyzes the contracts using those tools
 4. The agent can search the web and query on-chain state to understand the protocol's live context, find related contracts, and chain attack vectors (e.g., flash loans)
 5. Streams the agent's reasoning and actions to the terminal with rich formatting
@@ -44,7 +44,7 @@ Configuration priority (highest to lowest): CLI flags → environment variables 
 - **`REENTBOT_MODEL`** — Default model. Default: `anthropic/claude-sonnet-4-20250514`. Can also be passed via `--model`.
 - **`ETH_RPC_URL`** — Ethereum RPC URL for on-chain queries (`cast`, `anvil --fork-url`). Can also be passed via `--rpc-url`. Optional but strongly recommended.
 - **Default attacker capital:** $1k USD (configurable via `--capital`).
-- **Default budget:** 2M tokens | 200 turns | 60 minutes.
+- **Default budget:** 2.5M tokens | 500 turns | 60 minutes.
 - **Default context window:** 128k tokens (configurable via `--context-window`). Used to calculate how much conversation history to retain before truncating. Set this to match your model's actual context window for best results (e.g., `--context-window 200000` for Claude Sonnet 4).
 - **Verbosity levels:** `off` (tool headers only), `partial` (truncated output, default), `full` (complete output). Findings and report writes are never truncated.
 - **Output directory:** `./findings` (configurable via `--output`). Each run creates a timestamped subdirectory.
