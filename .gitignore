@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+
+# Tools / caches
+.ruff_cache/
+.mypy_cache/
+
+# Environment / secrets
+.env*
+
+# OS
+.DS_Store
+
+# Audit output (may contain sensitive findings)
+findings/
+
+# Keys
+*.pem
+*.key
+
+# IDE
+.idea/
+.vscode/
+
+# Claude Code
+.claude/
