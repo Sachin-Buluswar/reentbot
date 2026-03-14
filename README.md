@@ -6,25 +6,46 @@ Automated smart contract auditor. Runs an LLM agent loop over Slither, Foundry, 
 
 ```bash
 export OPENROUTER_API_KEY=sk-or-...
+git clone https://github.com/anthropics/ReentBot && cd ReentBot
 uv sync
-reentbot ./path/to/contracts
+uv run reentbot ./path/to/contracts
 ```
 
 ## Setup
 
-```bash
-# Install with uv
-uv pip install -e .
-
-# Or install dependencies
-uv sync
-```
-
 ### Requirements
 
 - Python 3.11+
+- [uv](https://docs.astral.sh/uv/getting-started/installation/)
 - Docker (running)
 - OpenRouter API key
+
+### Development setup (run from the ReentBot repo)
+
+```bash
+cd /path/to/ReentBot
+uv sync
+uv run reentbot /path/to/contracts
+```
+
+`uv sync` creates an isolated virtualenv and installs all dependencies. `uv run` executes `reentbot` inside that virtualenv. You must run `uv run` from the ReentBot project directory.
+
+### Global install (run from anywhere)
+
+```bash
+cd /path/to/ReentBot
+uv tool install -e .
+uv tool update-shell   # adds ~/.local/bin to your PATH if needed
+```
+
+Restart your terminal after `update-shell`. The `-e` (editable) flag means code changes take effect immediately without reinstalling. After this, `reentbot` works from any directory:
+
+```bash
+cd ~/Desktop/my-contracts
+reentbot .
+```
+
+To uninstall: `uv tool uninstall reentbot`
 
 ### Environment Variables
 
@@ -35,6 +56,8 @@ export REENTBOT_MODEL=anthropic/claude-sonnet-4-20250514  # Optional
 ```
 
 ## Usage
+
+If you used the development setup, prefix all commands below with `uv run` and run from the ReentBot directory. If you used the global install, the commands work as shown from any directory.
 
 ```bash
 # Basic audit — launches the interactive setup wizard
@@ -88,8 +111,8 @@ Exploit contracts and test files written by the agent during the audit persist i
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `--max-tokens` | 2,000,000 | Total token budget for the audit loop |
-| `--max-turns` | 200 | Maximum agent turns |
+| `--max-tokens` | 2,500,000 | Total token budget for the audit loop |
+| `--max-turns` | 500 | Maximum agent turns |
 | `--max-time` | 3600s | Wall-clock time limit |
 | `--context-window` | 128,000 | Model's context window size; controls conversation history retention |
 | Per-response (audit/chat) | 16,384 | Max output tokens per LLM response during audit and chat phases |
