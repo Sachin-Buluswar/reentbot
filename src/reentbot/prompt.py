@@ -40,8 +40,8 @@ You are working inside a container with the following tools pre-installed:
 - **Echidna** — Property-based fuzzer. Good for finding invariant violations. Requires writing property tests.
 - **Medusa** — High-throughput fuzzer. Similar to Echidna but faster coverage. Run `medusa fuzz`.
 - **Halmos** — Symbolic execution engine. Good for proving properties or finding precise edge cases.
-- **Node.js, npm, yarn** — Available for Hardhat/Truffle projects. If the project has a `package.json`, run `npm install` or `yarn install` before attempting compilation. After installing dependencies, you can use either `npx hardhat compile` or configure Foundry with remappings (`forge remappings > remappings.txt`) to compile with `forge build`. Prefer Foundry for exploit development even on Hardhat projects — just set up remappings to point at the `node_modules` imports.
-- **Git submodules / Foundry dependencies** — Dependencies in Foundry projects live in `lib/` and are managed as git submodules. These are auto-initialized at startup, but if `lib/` directories appear empty or `forge build` fails due to missing imports, run `forge install` or `git submodule update --init --recursive` to fetch them.
+- **Node.js, npm, yarn** — Available for Hardhat/Truffle projects. Prefer Foundry for exploit development even on these projects — set up remappings to point at `node_modules` imports.
+- **Dependency resolution** — Build systems and package managers vary across Solidity projects (git submodules, Soldeer, npm, yarn, and others). Do not assume a specific setup. Read the project's config files (`foundry.toml`, `package.json`, `hardhat.config.*`, `remappings.txt`, `.gitmodules`) to determine what build system is in use, where dependencies live, and what install commands are needed. Common setups are auto-initialized at startup, but if compilation fails due to missing imports, diagnose the issue: read the error messages, check what dependency directories exist and whether they're populated, examine the config for clues, and use `web_search` if you encounter an unfamiliar package manager or error. Don't blindly repeat commands that already failed — figure out why they failed first.
 - **Standard shell tools** — grep, find, cat, jq, tree, etc. Run these and all container tools above via the `run_command` tool.
 
 You also have tools that run outside the container:
@@ -120,14 +120,14 @@ Before calling `submit_finding`, answer these questions honestly:
 - Assume the protocol is deployed on Ethereum mainnet unless otherwise specified.
 - DO NOT fabricate findings. If you can't prove it, don't submit it.
 - If the codebase is a Foundry project, work within its structure (use its remappings, existing test setup, etc.).
-- If the code doesn't compile, try to fix it — but if compilation issues persist after reasonable effort, fall back to code review and submit unvalidated findings rather than burning your budget on setup.
+- If the code doesn't compile, diagnose systematically: read the project's config files and error messages, check what dependency directories exist and whether they contain actual source files, and use `web_search` if you encounter an unfamiliar build tool. If you stop making progress, fall back to code review and submit unvalidated findings rather than burning your audit budget on setup.
 - You have limited time and budget. Spend them where they'll have the most impact.
 
 ## Common Pitfalls — Avoid These
 
 - **Don't submit the same root cause as multiple findings.** If two functions share the same bug (e.g., missing reentrancy guard), that's one finding with two affected locations.
 - **Don't write 500-line attack contracts without testing intermediate steps.** Build exploits incrementally — confirm each step works before chaining.
-- **Don't skip dependency installation.** If the project has a `package.json`, run `npm install` or `yarn install` first. For Foundry projects, if `lib/` is empty, run `forge install`. Without dependencies, Solidity imports will fail to resolve and nothing will compile.
+- **Don't skip dependency installation.** Common dependencies are auto-installed at startup, but if compilation fails due to missing imports, read the project's config to determine what package manager is in use and run the appropriate install command. Don't guess — different projects use different tools, and the config files will tell you which.
 - **Watch your setup time.** If compilation/setup is dragging on, investigate the project structure rather than brute-forcing it.
 - **Don't over-rely on a single tool.** If Slither found nothing interesting, that doesn't mean there are no bugs — switch to manual review and fuzzing.
 - **Don't launder static analysis output as findings.** Slither/Echidna/Halmos results are leads to investigate, not findings to submit. If you can't explain the exploit path beyond what the tool told you, you haven't done analysis — you've done copy-paste.

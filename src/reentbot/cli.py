@@ -104,7 +104,7 @@ def _interactive_setup(
             config["context_window"] = _parse_number(cw)
             break
         except ValueError as e:
-            console.print(f"  [red]{e}[/]")
+            console.print(f"  [not bold red]{e}[/]")
 
     # Capital
     if capital >= 1_000_000 and capital % 1_000_000 == 0:
@@ -122,7 +122,7 @@ def _interactive_setup(
             config["capital"] = _parse_number(c)
             break
         except ValueError as e:
-            console.print(f"  [red]{e}[/]")
+            console.print(f"  [not bold red]{e}[/]")
 
     # Max time
     time_min = max_time // 60
@@ -134,10 +134,10 @@ def _interactive_setup(
         try:
             val = int(t)
         except ValueError:
-            console.print(f"  [red]Invalid number: {t}[/]")
+            console.print(f"  [not bold red]Invalid number: {t}[/]")
             continue
         if val <= 0:
-            console.print("  [red]Must be a positive number[/]")
+            console.print("  [not bold red]Must be a positive number[/]")
             continue
         config["max_time"] = val * 60
         break
@@ -158,7 +158,7 @@ def _interactive_setup(
             config["max_tokens"] = _parse_number(tk)
             break
         except ValueError as e:
-            console.print(f"  [red]{e}[/]")
+            console.print(f"  [not bold red]{e}[/]")
 
     # Max turns
     while True:
@@ -169,10 +169,10 @@ def _interactive_setup(
         try:
             val = int(tr)
         except ValueError:
-            console.print(f"  [red]Invalid number: {tr}[/]")
+            console.print(f"  [not bold red]Invalid number: {tr}[/]")
             continue
         if val <= 0:
-            console.print("  [red]Must be a positive number[/]")
+            console.print("  [not bold red]Must be a positive number[/]")
             continue
         config["max_turns"] = val
         break
@@ -191,7 +191,7 @@ def _interactive_setup(
             if v in ("off", "partial", "full"):
                 config["verbosity"] = v
                 break
-            console.print("  [red]Invalid choice — must be off, partial, or full[/]")
+            console.print("  [not bold red]Invalid choice — must be off, partial, or full[/]")
 
     console.print()
     return config
