@@ -468,7 +468,7 @@ async def _web_search(args: dict) -> str:
     max_results = args.get("max_results", 5)
 
     try:
-        from duckduckgo_search import DDGS
+        from ddgs import DDGS
 
         with DDGS() as ddgs:
             results = list(ddgs.text(query, max_results=max_results))

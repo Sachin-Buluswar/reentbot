@@ -43,8 +43,8 @@ class Display:
         lines = [
             f"[bold]Target:[/]  {source_dir}",
             f"[bold]Model:[/]   {model}",
-            f"[bold]Budget:[/]  {budget['max_tokens'] // 1000}k tokens | {budget['max_turns']} turns | {budget['max_time'] // 60} min | {budget.get('context_window', 200_000) // 1000}k context",
-            f"[bold]Capital:[/] ${budget.get('capital', 1000):,}",
+            f"[bold]Budget:[/]  [cyan]{budget['max_tokens'] // 1000}k[/cyan] tokens | [cyan]{budget['max_turns']}[/cyan] turns | [cyan]{budget['max_time'] // 60}[/cyan] min | [cyan]{budget.get('context_window', 200_000) // 1000}k[/cyan] context",
+            f"[bold]Capital:[/] [cyan]${budget.get('capital', 1000):,}[/cyan]",
         ]
         if rpc and rpc != "not set":
             lines.append(f"[bold]RPC:[/]     {rpc}")
@@ -52,7 +52,7 @@ class Display:
         if reasoning != "off":
             lines.append(f"[bold]Reasoning:[/] {reasoning}")
         self.console.print(Panel(
-            "\n".join(lines),
+            Text.from_markup("\n".join(lines)),
             title="[bold cyan]ReentBot[/]",
             border_style="cyan",
         ))
@@ -112,7 +112,7 @@ class Display:
             display_str = f"{token_count / 1000:.1f}k"
         else:
             display_str = str(token_count)
-        self.console.print(f"  [dim]\\[reasoning: {display_str} tokens][/]")
+        self.console.print(f"  [dim]\\[reasoning: [cyan]{display_str}[/cyan] tokens][/]", highlight=False)
 
     def tool_start(self, tool_call: dict):
         """Show that a tool is being invoked."""
@@ -175,13 +175,15 @@ class Display:
 
         affected = ""
         for loc in finding.get("affected_code", []):
-            affected += f"\n  {loc.get('file', '?')}:{loc.get('lines', '?')}"
+            affected += f"\n  {loc.get('file', '?')}:[cyan]{loc.get('lines', '?')}[/cyan]"
 
         description = finding.get("description", "")
         self.console.print(Panel(
-            f"[bold]{title}[/]\n"
-            f"{description}\n"
-            f"[dim]Affected:{affected}[/]{check}",
+            Text.from_markup(
+                f"[bold]{title}[/]\n"
+                f"{description}\n"
+                f"[dim]Affected:{affected}[/]{check}"
+            ),
             title=f"Finding #{self.finding_count} \u2014 {severity.upper()}",
             border_style=style.split()[-1] if " " in style else style,
             expand=False,
@@ -208,11 +210,12 @@ class Display:
         reasoning_str = ""
         if reasoning_tokens > 0:
             r_k = reasoning_tokens // 1000
-            reasoning_str = f" ({r_k}k reasoning)"
+            reasoning_str = f" ([cyan]{r_k}k[/cyan] reasoning)"
         self.console.print(
-            f"[dim]\u23f1 Turn {turn}/{max_turns} | "
-            f"Tokens: {tok_k}k/{tok_max_k}k{reasoning_str} | "
-            f"Time: {mins_elapsed}:{secs_elapsed:02d}/{mins_max}:00[/]"
+            f"[dim]\u23f1 Turn [cyan]{turn}[/cyan]/[cyan]{max_turns}[/cyan] | "
+            f"Tokens: [cyan]{tok_k}k[/cyan]/[cyan]{tok_max_k}k[/cyan]{reasoning_str} | "
+            f"Time: [cyan]{mins_elapsed}:{secs_elapsed:02d}[/cyan]/[cyan]{mins_max}:00[/cyan][/]",
+            highlight=False,
         )
 
     def agent_done(self):

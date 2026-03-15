@@ -32,7 +32,7 @@ Use `uv` for Python project management. Python 3.11+. Six dependencies:
 - `rich` — Terminal formatting (panels, syntax highlighting, streaming).
 - `click` — CLI argument parsing.
 - `httpx` — HTTP client for fetching web pages (used by `fetch_url` tool on the host side).
-- `duckduckgo-search` — Web search with no API key required (used by `web_search` tool on the host side).
+- `ddgs` — Web search via DuckDuckGo with no API key required (used by `web_search` tool on the host side).
 
 ---
 

@@ -603,8 +603,12 @@ async def _stream_turn(
 
         delta = chunk.choices[0].delta
 
-        # ── Reasoning details (structured) ──
+        # ── Reasoning (structured takes priority over simple) ──
         raw_reasoning = getattr(delta, "reasoning_details", None)
+        raw_simple = (
+            getattr(delta, "reasoning", None)
+            or getattr(delta, "reasoning_content", None)
+        )
         if raw_reasoning:
             if not reasoning_active:
                 reasoning_active = True
@@ -636,12 +640,10 @@ async def _stream_turn(
                     reasoning_text_parts.append(text_chunk)
                     display.stream_reasoning(text_chunk)
 
-        # ── Simple reasoning field (some models use this) ──
-        raw_simple = (
-            getattr(delta, "reasoning", None)
-            or getattr(delta, "reasoning_content", None)
-        )
-        if raw_simple and isinstance(raw_simple, str):
+        elif raw_simple and isinstance(raw_simple, str):
+            # Simple reasoning field — fallback for models that don't use
+            # reasoning_details.  Skipped when reasoning_details was present
+            # to avoid printing the same tokens twice.
             if not reasoning_active:
                 reasoning_active = True
             reasoning_text_parts.append(raw_simple)
