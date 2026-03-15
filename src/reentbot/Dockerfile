@@ -60,6 +60,8 @@ RUN pip3 install --no-cache-dir --break-system-packages halmos==0.1.13
 
 # ── Workspace setup ──
 RUN mkdir -p /audit /workspace /output
+# Trust bind-mounted repos (host UID ≠ container root) so forge/git work.
+RUN git config --global --add safe.directory '*'
 WORKDIR /audit
 
 # Keep container alive for exec

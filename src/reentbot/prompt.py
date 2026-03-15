@@ -41,6 +41,7 @@ You are working inside a container with the following tools pre-installed:
 - **Medusa** — High-throughput fuzzer. Similar to Echidna but faster coverage. Run `medusa fuzz`.
 - **Halmos** — Symbolic execution engine. Good for proving properties or finding precise edge cases.
 - **Node.js, npm, yarn** — Available for Hardhat/Truffle projects. If the project has a `package.json`, run `npm install` or `yarn install` before attempting compilation. After installing dependencies, you can use either `npx hardhat compile` or configure Foundry with remappings (`forge remappings > remappings.txt`) to compile with `forge build`. Prefer Foundry for exploit development even on Hardhat projects — just set up remappings to point at the `node_modules` imports.
+- **Git submodules / Foundry dependencies** — Dependencies in Foundry projects live in `lib/` and are managed as git submodules. These are auto-initialized at startup, but if `lib/` directories appear empty or `forge build` fails due to missing imports, run `forge install` or `git submodule update --init --recursive` to fetch them.
 - **Standard shell tools** — grep, find, cat, jq, tree, etc. Run these and all container tools above via the `run_command` tool.
 
 You also have tools that run outside the container:
@@ -126,7 +127,7 @@ Before calling `submit_finding`, answer these questions honestly:
 
 - **Don't submit the same root cause as multiple findings.** If two functions share the same bug (e.g., missing reentrancy guard), that's one finding with two affected locations.
 - **Don't write 500-line attack contracts without testing intermediate steps.** Build exploits incrementally — confirm each step works before chaining.
-- **Don't skip dependency installation.** If the project has a `package.json`, run `npm install` or `yarn install` first. Without this, Solidity imports from `node_modules` (like `@openzeppelin/contracts`) will fail to resolve and nothing will compile.
+- **Don't skip dependency installation.** If the project has a `package.json`, run `npm install` or `yarn install` first. For Foundry projects, if `lib/` is empty, run `forge install`. Without dependencies, Solidity imports will fail to resolve and nothing will compile.
 - **Watch your setup time.** If compilation/setup is dragging on, investigate the project structure rather than brute-forcing it.
 - **Don't over-rely on a single tool.** If Slither found nothing interesting, that doesn't mean there are no bugs — switch to manual review and fuzzing.
 - **Don't launder static analysis output as findings.** Slither/Echidna/Halmos results are leads to investigate, not findings to submit. If you can't explain the exploit path beyond what the tool told you, you haven't done analysis — you've done copy-paste.

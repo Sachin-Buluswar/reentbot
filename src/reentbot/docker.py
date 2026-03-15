@@ -100,8 +100,28 @@ class AuditContainer:
             return container
 
         self._container = await asyncio.to_thread(_create_and_start)
+        await self._init_source(on_status=on_status)
         if on_status:
-            on_status("Container started")
+            on_status("Container ready")
+
+    async def _init_source(self, on_status=None) -> None:
+        """Initialize git repo state in the mounted source directory."""
+        # Ensure git trusts the bind-mounted directory (ownership differs
+        # between host user and container root).  Redundant with the
+        # Dockerfile config but needed for cached / older images.
+        await self.exec(
+            "git config --global --add safe.directory '*'", timeout=5
+        )
+        # Initialize git submodules if present — Foundry projects store
+        # dependencies (OpenZeppelin, forge-std, etc.) as submodules in lib/.
+        exit_code, _ = await self.exec("[ -f .gitmodules ]", timeout=5)
+        if exit_code == 0:
+            if on_status:
+                on_status("Initializing git submodules...")
+            await self.exec(
+                "git submodule update --init --recursive 2>/dev/null || true",
+                timeout=120,
+            )
 
     async def exec(
         self, command: str, working_dir: str = "/audit", timeout: int = 120
