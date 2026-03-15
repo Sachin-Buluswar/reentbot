@@ -9,6 +9,7 @@ from openai import AsyncOpenAI
 
 from reentbot.display import Display
 from reentbot.docker import AuditContainer
+from reentbot.llm import build_reasoning_body
 from reentbot.prompt import REPORT_INSTRUCTION
 from reentbot.tools import PARALLEL_SAFE, TOOLS, execute_tool
 
@@ -21,19 +22,46 @@ REPORT_OUTPUT_RESERVE = 65_536  # max_tokens for report generation (longer outpu
 _SAFETY_MARGIN = 2_500
 _TOOLS_TOKEN_OVERHEAD = len(json.dumps(TOOLS, default=str)) // 4
 
+# Reasoning effort → output token multiplier.  The multiplier preserves the
+# content budget at roughly its original size: multiplier = 1/(1 - reasoning%).
+# e.g. at "high" (~80% reasoning), 16k base → 82k total, ~65k reasoning + ~16k content.
+_REASONING_MULTIPLIERS = {
+    "low": 1.3,
+    "medium": 2.0,
+    "high": 5.0,
+}
+
+# Hard ceiling per API call.  Prevents the multiplier from producing absurd
+# max_tokens values when applied to large base reserves (e.g. REPORT_OUTPUT_RESERVE
+# at "high" would be 65k*5 = 327k without this cap).
+_MAX_OUTPUT_TOKENS = 128_000
+
+
+def _adjusted_output_reserve(base: int, reasoning_effort: str | None) -> int:
+    """Adjust output token reserve for reasoning overhead."""
+    if not reasoning_effort or reasoning_effort == "off":
+        return base
+    return int(base * _REASONING_MULTIPLIERS.get(reasoning_effort, 1.0))
+
 
 def calculate_max_context(
-    context_window: int, output_reserve: int = _OUTPUT_RESERVE
+    context_window: int,
+    output_reserve: int = _OUTPUT_RESERVE,
+    reasoning_effort: str | None = None,
 ) -> int:
     """Calculate how many tokens of conversation history to retain.
 
-    Subtracts space reserved for the model's response (output_reserve),
-    a safety margin, and the token overhead of tool definitions (sent with
-    every API call but not counted in message tokens) from the model's
-    context window. Floors at 10k to prevent negative or unusably small values.
+    Subtracts space reserved for the model's response (output_reserve,
+    adjusted for reasoning overhead), a safety margin, and the token overhead
+    of tool definitions (sent with every API call but not counted in message
+    tokens) from the model's context window.  The adjusted reserve is capped
+    at half the context window so output can never starve input of space.
+    Floors at 10k to prevent negative or unusably small values.
     """
+    adjusted_reserve = _adjusted_output_reserve(output_reserve, reasoning_effort)
+    adjusted_reserve = min(adjusted_reserve, context_window // 2)
     return max(
-        context_window - output_reserve - _SAFETY_MARGIN - _TOOLS_TOKEN_OVERHEAD,
+        context_window - adjusted_reserve - _SAFETY_MARGIN - _TOOLS_TOKEN_OVERHEAD,
         10_000,
     )
 
@@ -157,7 +185,14 @@ def _compress_turn(turn: list[dict]) -> list[dict]:
     for tc in assistant_msg.get("tool_calls", []):
         tc_names[tc["id"]] = tc["function"]["name"]
 
-    compressed = [assistant_msg]  # keep assistant reasoning as-is
+    # Strip reasoning from compressed turns to reclaim context space.
+    # The conclusions live in content; reasoning is only needed on the
+    # most recent assistant message for tool-call continuity.
+    stripped_assistant = {
+        k: v for k, v in assistant_msg.items()
+        if k not in ("reasoning", "reasoning_details")
+    }
+    compressed = [stripped_assistant]
     for msg in turn[1:]:
         content = msg.get("content", "")
         if msg["role"] == "tool" and len(content) > 500:
@@ -167,6 +202,33 @@ def _compress_turn(turn: list[dict]) -> list[dict]:
         else:
             compressed.append(msg)
     return compressed
+
+
+def _strip_old_reasoning(messages: list[dict]) -> None:
+    """Remove reasoning content from all but the last assistant message.
+
+    The most recent assistant message retains reasoning/reasoning_details
+    because some providers require them for tool-call continuity.  Older
+    messages have reasoning stripped to reclaim context space.
+    """
+    last_assistant_idx = None
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].get("role") == "assistant":
+            last_assistant_idx = i
+            break
+
+    if last_assistant_idx is None:
+        return
+
+    for i in range(len(messages)):
+        msg = messages[i]
+        if (i != last_assistant_idx
+                and msg.get("role") == "assistant"
+                and ("reasoning" in msg or "reasoning_details" in msg)):
+            messages[i] = {
+                k: v for k, v in msg.items()
+                if k not in ("reasoning", "reasoning_details")
+            }
 
 
 def _update_explored(tool_calls: list[dict], explored: dict):
@@ -200,11 +262,16 @@ def _truncate_messages(
     Uses turn-based grouping so that assistant tool_call messages and their
     tool result messages are always kept or dropped together — never split.
 
-    Truncation strategy (two-phase):
+    Reasoning content from old assistant messages is always stripped
+    proactively (keeping only the most recent for tool-call continuity),
+    since it can be very large and serves no purpose once the model has
+    moved on.
+
+    Truncation strategy (two-phase, only when over budget after stripping):
     1. Recent turns are kept at full fidelity (most recent first).
     2. Older turns that don't fit at full size are compressed — bulky tool
-       results are replaced with short summaries while assistant reasoning
-       is preserved. Compressed turns fill whatever budget remains.
+       results are replaced with short summaries while assistant content and
+       tool calls are preserved. Compressed turns fill whatever budget remains.
 
     A truncation note is injected with a summary of findings and explored
     state so the agent retains knowledge of what it has discovered and
@@ -212,6 +279,10 @@ def _truncate_messages(
 
     Turn costs are precomputed once to avoid repeated JSON serialization.
     """
+    # Always strip old reasoning — it's huge and only the most recent
+    # assistant message needs it for tool-call continuity.
+    _strip_old_reasoning(messages)
+
     if _estimate_tokens(messages) <= max_estimated_tokens:
         return messages
 
@@ -285,6 +356,12 @@ def _truncate_messages(
         result.extend(turn)
     for turn in recent_turns:
         result.extend(turn)
+
+    # Strip reasoning from all but the most recent assistant message to
+    # reclaim context space (_compress_turn already strips compressed turns;
+    # this catches surviving recent turns that aren't the latest).
+    _strip_old_reasoning(result)
+
     return result
 
 
@@ -302,6 +379,7 @@ async def run_audit(
     max_time_seconds: int = 3600,
     prior_findings: list[dict] | None = None,
     max_context: int = calculate_max_context(DEFAULT_CONTEXT_WINDOW),
+    reasoning_config: dict | None = None,
 ) -> tuple[list[dict], list[dict], dict]:
     """
     Run the audit agent loop.
@@ -334,6 +412,7 @@ async def run_audit(
     findings: list[dict] = []
     explored: dict = {"files_read": set(), "tools_run": set()}
     total_tokens_used = 0
+    reasoning_tokens_used = 0
     start_time = time.time()
     turn = 0
     budget_warned_90 = False
@@ -416,6 +495,7 @@ async def run_audit(
                     total_tokens_used, max_tokens,
                     elapsed, max_time_seconds,
                     turn, max_turns,
+                    reasoning_tokens=reasoning_tokens_used,
                 )
 
             # Context window management
@@ -423,8 +503,9 @@ async def run_audit(
 
             # Call LLM (streaming)
             try:
-                response_message, tokens = await _stream_turn(
-                    client, model, messages, display
+                response_message, tokens, r_tokens = await _stream_turn(
+                    client, model, messages, display,
+                    reasoning_config=reasoning_config,
                 )
             except Exception as e:
                 # Retry with backoff
@@ -433,8 +514,9 @@ async def run_audit(
                     display.error(f"LLM call failed ({e}), retrying ({attempt + 1}/3)...")
                     await asyncio.sleep(2 ** attempt)
                     try:
-                        response_message, tokens = await _stream_turn(
-                            client, model, messages, display
+                        response_message, tokens, r_tokens = await _stream_turn(
+                            client, model, messages, display,
+                            reasoning_config=reasoning_config,
                         )
                         success = True
                         break
@@ -445,6 +527,7 @@ async def run_audit(
                     break
 
             total_tokens_used += tokens
+            reasoning_tokens_used += r_tokens
             messages.append(response_message)
 
             # If no tool calls, agent is done
@@ -474,36 +557,107 @@ async def _stream_turn(
     messages: list[dict],
     display: Display,
     max_tokens: int = _OUTPUT_RESERVE,
-) -> tuple[dict, int]:
-    """Make one streaming LLM call. Returns (assistant_message, token_count)."""
+    reasoning_config: dict | None = None,
+) -> tuple[dict, int, int]:
+    """Make one streaming LLM call.
+
+    Returns (assistant_message, total_token_count, reasoning_token_count).
+    """
+    # Adjust max_tokens for reasoning overhead
+    effort = reasoning_config.get("effort") if reasoning_config else None
+    adjusted_max = min(
+        _adjusted_output_reserve(max_tokens, effort),
+        _MAX_OUTPUT_TOKENS,
+    )
+
+    # Build extra_body for reasoning
+    extra_body = build_reasoning_body(reasoning_config)
+
     stream = await client.chat.completions.create(
         model=model,
         messages=messages,
         tools=TOOLS,
         stream=True,
-        max_tokens=max_tokens,
+        max_tokens=adjusted_max,
         stream_options={"include_usage": True},
+        extra_body=extra_body,
     )
 
     content_parts = []
     tool_calls_acc: dict[int, dict] = {}
+    reasoning_text_parts: list[str] = []
+    reasoning_details_acc: dict[int, dict] = {}
+    reasoning_active = False
     usage_tokens = 0
+    reasoning_token_count = 0
 
     async for chunk in stream:
         if not chunk.choices:
             # Final chunk may have usage info
             if hasattr(chunk, "usage") and chunk.usage:
                 usage_tokens = getattr(chunk.usage, "total_tokens", 0)
+                cd = getattr(chunk.usage, "completion_tokens_details", None)
+                if cd:
+                    reasoning_token_count = getattr(cd, "reasoning_tokens", 0) or 0
             continue
 
         delta = chunk.choices[0].delta
 
-        # Stream text content
+        # ── Reasoning details (structured) ──
+        raw_reasoning = getattr(delta, "reasoning_details", None)
+        if raw_reasoning:
+            if not reasoning_active:
+                reasoning_active = True
+            for detail in raw_reasoning:
+                # Normalize to dict
+                if hasattr(detail, "model_dump"):
+                    d = detail.model_dump(exclude_none=True)
+                elif isinstance(detail, dict):
+                    d = detail
+                else:
+                    d = {}
+
+                # Accumulate structured detail by index
+                idx = d.get("index", 0)
+                if idx not in reasoning_details_acc:
+                    reasoning_details_acc[idx] = {}
+                acc = reasoning_details_acc[idx]
+                for key, value in d.items():
+                    if value is None or key == "index":
+                        continue
+                    if key in ("text", "summary", "data") and isinstance(value, str):
+                        acc[key] = acc.get(key, "") + value
+                    else:
+                        acc[key] = value
+
+                # Stream reasoning text for display
+                text_chunk = d.get("text", "")
+                if text_chunk:
+                    reasoning_text_parts.append(text_chunk)
+                    display.stream_reasoning(text_chunk)
+
+        # ── Simple reasoning field (some models use this) ──
+        raw_simple = (
+            getattr(delta, "reasoning", None)
+            or getattr(delta, "reasoning_content", None)
+        )
+        if raw_simple and isinstance(raw_simple, str):
+            if not reasoning_active:
+                reasoning_active = True
+            reasoning_text_parts.append(raw_simple)
+            display.stream_reasoning(raw_simple)
+
+        # Detect transition from reasoning to content/tool_calls
+        if reasoning_active and (delta.content or delta.tool_calls):
+            reasoning_active = False
+            display.end_reasoning()
+
+        # ── Stream text content ──
         if delta.content:
             content_parts.append(delta.content)
             display.stream_text(delta.content)
 
-        # Accumulate tool calls
+        # ── Accumulate tool calls ──
         if delta.tool_calls:
             for tc_delta in delta.tool_calls:
                 idx = tc_delta.index
@@ -524,13 +678,28 @@ async def _stream_turn(
         # Check for usage in final chunk
         if hasattr(chunk, "usage") and chunk.usage:
             usage_tokens = getattr(chunk.usage, "total_tokens", 0)
+            cd = getattr(chunk.usage, "completion_tokens_details", None)
+            if cd:
+                reasoning_token_count = getattr(cd, "reasoning_tokens", 0) or 0
+
+    # End reasoning display if still active (e.g. model only produced reasoning)
+    if reasoning_active:
+        display.end_reasoning()
 
     content = "".join(content_parts)
     tool_calls = [tool_calls_acc[i] for i in sorted(tool_calls_acc.keys())] if tool_calls_acc else []
+    reasoning_text = "".join(reasoning_text_parts)
 
-    # Estimate tokens if API didn't provide them
+    # Show reasoning token summary
+    if reasoning_text and reasoning_token_count == 0:
+        # Estimate if API didn't provide reasoning token count
+        reasoning_token_count = len(reasoning_text) // 4
+    if reasoning_token_count > 0:
+        display.reasoning_summary(reasoning_token_count)
+
+    # Estimate total tokens if API didn't provide them
     if usage_tokens == 0:
-        completion_len = len(content)
+        completion_len = len(content) + len(reasoning_text)
         for tc in tool_calls:
             completion_len += len(tc["function"].get("arguments", ""))
         usage_tokens = (len(json.dumps(messages, default=str)) + completion_len) // 4
@@ -541,8 +710,14 @@ async def _stream_turn(
         msg["content"] = content
     if tool_calls:
         msg["tool_calls"] = tool_calls
+    if reasoning_details_acc:
+        msg["reasoning_details"] = [
+            reasoning_details_acc[i] for i in sorted(reasoning_details_acc.keys())
+        ]
+    if reasoning_text:
+        msg["reasoning"] = reasoning_text
 
-    return msg, usage_tokens
+    return msg, usage_tokens, reasoning_token_count
 
 
 async def _execute_tool_calls(
@@ -619,6 +794,7 @@ async def run_report(
     findings: list[dict],
     explored: dict | None = None,
     max_context: int = calculate_max_context(DEFAULT_CONTEXT_WINDOW),
+    reasoning_config: dict | None = None,
 ) -> str | None:
     """Generate the vulnerability report. Returns report content or None.
 
@@ -652,9 +828,10 @@ async def run_report(
     for _ in range(10):
         messages = _truncate_messages(messages, findings, explored, max_context)
         try:
-            response_message, _ = await _stream_turn(
+            response_message, _, _ = await _stream_turn(
                 client, model, messages, display,
                 max_tokens=REPORT_OUTPUT_RESERVE,
+                reasoning_config=reasoning_config,
             )
         except Exception as e:
             display.error(f"Report generation failed: {e}")
@@ -707,6 +884,7 @@ async def chat_loop(
     max_turns: int = 500,
     max_time_seconds: int = 3600,
     max_context: int = calculate_max_context(DEFAULT_CONTEXT_WINDOW),
+    reasoning_config: dict | None = None,
 ):
     """Interactive chat after audit."""
     display.chat_start()
@@ -733,6 +911,7 @@ async def chat_loop(
                 max_time_seconds=max_time_seconds,
                 prior_findings=findings,
                 max_context=max_context,
+                reasoning_config=reasoning_config,
             )
             findings.extend(new_findings)
             # Merge explored state
@@ -747,7 +926,10 @@ async def chat_loop(
         for _ in range(20):  # Safety limit per chat turn
             messages = _truncate_messages(messages, findings, explored, max_context)
             try:
-                response_message, _ = await _stream_turn(client, model, messages, display)
+                response_message, _, _ = await _stream_turn(
+                    client, model, messages, display,
+                    reasoning_config=reasoning_config,
+                )
             except Exception as e:
                 display.error(f"LLM call failed: {e}")
                 break

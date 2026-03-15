@@ -82,6 +82,11 @@ reentbot ./contracts --output ./my-audit-results --image my-custom-tools
 reentbot ./contracts --verbosity full     # Complete untruncated output
 reentbot ./contracts --verbosity partial  # Truncated output (default)
 reentbot ./contracts --verbosity off      # Tool headers only, no result panels
+
+# Enable reasoning for models that support extended thinking
+reentbot ./contracts --reasoning high     # Deep thinking (5x output tokens)
+reentbot ./contracts --reasoning medium   # Moderate thinking (2x output tokens)
+reentbot ./contracts --reasoning low      # Light thinking (1.3x output tokens)
 ```
 
 If any configuration values are missing (not provided via CLI flags or environment variables), the setup wizard will prompt you interactively before starting the audit. Values provided via CLI flags or env vars skip their respective prompts.
@@ -115,6 +120,7 @@ Exploit contracts and test files written by the agent during the audit persist i
 | `--max-turns` | 500 | Maximum agent turns |
 | `--max-time` | 3600s | Wall-clock time limit |
 | `--context-window` | 200,000 | Model's context window size; controls conversation history retention |
+| `--reasoning` | off | Reasoning effort: off/low/medium/high. Multiplies output tokens by 1.3x/2x/5x |
 | Per-response (audit/chat) | 16,384 | Max output tokens per LLM response during audit and chat phases |
 | Per-response (report) | 65,536 | Max output tokens per LLM response during report generation |
 

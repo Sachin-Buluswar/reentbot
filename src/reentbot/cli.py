@@ -51,6 +51,7 @@ def _interactive_setup(
     context_window: int = DEFAULT_CONTEXT_WINDOW,
     verbosity: str | None = None,
     default_verbosity: str = "partial",
+    reasoning: str | None = None,
 ) -> dict:
     """Prompt for missing configuration values interactively."""
     config: dict = {}
@@ -193,6 +194,22 @@ def _interactive_setup(
                 break
             console.print("  [not bold red]Invalid choice — must be off, partial, or full[/]")
 
+    # Reasoning
+    if reasoning:
+        config["reasoning"] = reasoning
+    else:
+        while True:
+            r = console.input(
+                "\n  Reasoning effort — off / low / medium / high \\[[not bold blue]off[/]]: "
+            ).strip().lower()
+            if not r:
+                config["reasoning"] = "off"
+                break
+            if r in ("off", "low", "medium", "high"):
+                config["reasoning"] = r
+                break
+            console.print("  [not bold red]Invalid choice — must be off, low, medium, or high[/]")
+
     console.print()
     return config
 
@@ -211,6 +228,7 @@ async def _run(
     no_chat: bool,
     verbosity: str | None,
     context_window: int = DEFAULT_CONTEXT_WINDOW,
+    reasoning: str | None = None,
 ):
     """Async main entry point."""
     console = Console()
@@ -227,7 +245,8 @@ async def _run(
     if sys.stdin.isatty():
         config = _interactive_setup(
             console, api_key, model, rpc_url, capital, max_time,
-            max_tokens, max_turns, context_window=context_window, verbosity=verbosity,
+            max_tokens, max_turns, context_window=context_window,
+            verbosity=verbosity, reasoning=reasoning,
         )
     else:
         if not api_key:
@@ -243,6 +262,7 @@ async def _run(
             "max_turns": max_turns,
             "context_window": context_window,
             "verbosity": verbosity or "partial",
+            "reasoning": reasoning or "off",
         }
     api_key = config["api_key"]
     model = config["model"]
@@ -252,9 +272,16 @@ async def _run(
     max_tokens = config["max_tokens"]
     max_turns = config["max_turns"]
     context_window = config["context_window"]
-    max_context = calculate_max_context(context_window)
+    reasoning_effort = config["reasoning"]
+    reasoning_config = (
+        {"effort": reasoning_effort} if reasoning_effort != "off" else None
+    )
+    max_context = calculate_max_context(
+        context_window, reasoning_effort=reasoning_effort,
+    )
     report_max_context = calculate_max_context(
-        context_window, output_reserve=REPORT_OUTPUT_RESERVE
+        context_window, output_reserve=REPORT_OUTPUT_RESERVE,
+        reasoning_effort=reasoning_effort,
     )
     verbosity = config["verbosity"]
 
@@ -275,7 +302,14 @@ async def _run(
         "rpc_url": rpc_url,
         "capital": capital,
         "context_window": context_window,
+        "reasoning": reasoning_effort,
     })
+
+    if reasoning_config:
+        display.status(
+            f"Reasoning enabled ({reasoning_effort}) — "
+            "token usage will be significantly higher"
+        )
 
     # Create LLM client
     client = create_client(api_key)
@@ -300,6 +334,7 @@ async def _run(
             max_turns=max_turns,
             max_time_seconds=max_time,
             max_context=max_context,
+            reasoning_config=reasoning_config,
         )
 
         # ── Report phase ──
@@ -307,6 +342,7 @@ async def _run(
             client, model, messages, container, display, findings,
             explored=explored,
             max_context=report_max_context,
+            reasoning_config=reasoning_config,
         )
 
         # Save report to host and render in TUI
@@ -343,6 +379,7 @@ async def _run(
                 max_turns=max_turns,
                 max_time_seconds=max_time,
                 max_context=max_context,
+                reasoning_config=reasoning_config,
             )
 
             # Re-save if findings were added during chat (e.g. keep-auditing)
@@ -403,7 +440,12 @@ async def _run(
     "--context-window", default=DEFAULT_CONTEXT_WINDOW, type=int,
     help="Model's context window size in tokens (default: 200k)",
 )
-def main(source_dir, api_key, model, max_tokens, max_turns, max_time, output, image, rpc_url, capital, no_chat, verbosity, context_window):
+@click.option(
+    "--reasoning", default=None,
+    type=click.Choice(["off", "low", "medium", "high"], case_sensitive=False),
+    help="Reasoning effort level (off=disabled, low/medium/high=thinking depth)",
+)
+def main(source_dir, api_key, model, max_tokens, max_turns, max_time, output, image, rpc_url, capital, no_chat, verbosity, context_window, reasoning):
     """Audit smart contracts for exploitable vulnerabilities."""
     asyncio.run(_run(
         source_dir=source_dir,
@@ -419,4 +461,5 @@ def main(source_dir, api_key, model, max_tokens, max_turns, max_time, output, im
         no_chat=no_chat,
         verbosity=verbosity,
         context_window=context_window,
+        reasoning=reasoning,
     ))

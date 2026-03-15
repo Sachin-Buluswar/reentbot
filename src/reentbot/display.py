@@ -33,6 +33,7 @@ class Display:
         self.verbosity = verbosity
         self.finding_count = 0
         self._streaming = False
+        self._reasoning_started = False
 
     def header(self, source_dir: str, model: str, budget: dict):
         """Print audit header with config info."""
@@ -47,6 +48,9 @@ class Display:
         ]
         if rpc and rpc != "not set":
             lines.append(f"[bold]RPC:[/]     {rpc}")
+        reasoning = budget.get("reasoning", "off")
+        if reasoning != "off":
+            lines.append(f"[bold]Reasoning:[/] {reasoning}")
         self.console.print(Panel(
             "\n".join(lines),
             title="[bold cyan]ReentBot[/]",
@@ -71,6 +75,44 @@ class Display:
         if self._streaming:
             self.console.print()
             self._streaming = False
+
+    def stream_reasoning(self, text: str):
+        """Stream reasoning/thinking content according to verbosity.
+
+        - off: suppress entirely
+        - partial: show 'thinking...' indicator on first chunk, suppress rest
+        - full: stream all reasoning tokens in dim italic style
+        """
+        if self.verbosity == "off":
+            return
+        if self.verbosity == "partial":
+            if not self._reasoning_started:
+                self._reasoning_started = True
+                self._end_stream()
+                self.console.print("  [dim italic]thinking...[/]")
+            return
+        # full verbosity — stream all reasoning content
+        if not self._reasoning_started:
+            self._reasoning_started = True
+            self._end_stream()
+        self.console.print(Text(text, style="dim italic"), end="")
+
+    def end_reasoning(self):
+        """Signal end of a reasoning block."""
+        if self._reasoning_started:
+            if self.verbosity == "full":
+                self.console.print()  # newline after streamed reasoning
+            self._reasoning_started = False
+
+    def reasoning_summary(self, token_count: int):
+        """Show reasoning token count summary."""
+        if self.verbosity == "off" or token_count <= 0:
+            return
+        if token_count >= 1000:
+            display_str = f"{token_count / 1000:.1f}k"
+        else:
+            display_str = str(token_count)
+        self.console.print(f"  [dim]\\[reasoning: {display_str} tokens][/]")
 
     def tool_start(self, tool_call: dict):
         """Show that a tool is being invoked."""
@@ -154,6 +196,7 @@ class Display:
         time_max: float,
         turn: int,
         max_turns: int,
+        reasoning_tokens: int = 0,
     ):
         """Show budget status line."""
         self._end_stream()
@@ -162,9 +205,13 @@ class Display:
         mins_max = int(time_max) // 60
         tok_k = tokens_used // 1000
         tok_max_k = tokens_max // 1000
+        reasoning_str = ""
+        if reasoning_tokens > 0:
+            r_k = reasoning_tokens // 1000
+            reasoning_str = f" ({r_k}k reasoning)"
         self.console.print(
             f"[dim]\u23f1 Turn {turn}/{max_turns} | "
-            f"Tokens: {tok_k}k/{tok_max_k}k | "
+            f"Tokens: {tok_k}k/{tok_max_k}k{reasoning_str} | "
             f"Time: {mins_elapsed}:{secs_elapsed:02d}/{mins_max}:00[/]"
         )
 

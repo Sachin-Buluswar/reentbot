@@ -47,6 +47,7 @@ Configuration priority (highest to lowest): CLI flags → environment variables 
 - **Default budget:** 2.5M tokens | 500 turns | 60 minutes.
 - **Default context window:** 200k tokens (configurable via `--context-window`). Used to calculate how much conversation history to retain before truncating. Set this to match your model's actual context window for best results (e.g., `--context-window 200000` for MiniMax M2.5).
 - **Verbosity levels:** `off` (tool headers only), `partial` (truncated output, default), `full` (complete output). Findings and report writes are never truncated.
+- **Reasoning:** `off` (default), `low`, `medium`, `high` (configurable via `--reasoning`). Controls thinking depth for models that support extended reasoning. Higher levels significantly increase token usage — output tokens are multiplied by 1.3x/2x/5x respectively to preserve the content budget while allocating space for reasoning. Output is capped at 128k tokens per call and at half the context window to prevent overflow. Reasoning display follows the verbosity setting: `off` hides it, `partial` shows a thinking indicator and token count, `full` streams all reasoning content. Silently ignored for models without reasoning support.
 - **Output directory:** `./findings` (configurable via `--output`). Each run creates a timestamped subdirectory.
 - **Docker image name:** `reentbot-tools` (configurable via `--image`).
 - **Skip chat:** `--no-chat` flag skips the interactive chat phase after the report.
