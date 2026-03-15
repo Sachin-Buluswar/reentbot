@@ -2,7 +2,7 @@
 
 from openai import AsyncOpenAI
 
-DEFAULT_MODEL = "anthropic/claude-sonnet-4-20250514"
+DEFAULT_MODEL = "minimax/minimax-m2.5"
 
 EXTRA_HEADERS = {
     "HTTP-Referer": "https://github.com/reentbot",

@@ -15,7 +15,7 @@ from reentbot.tools import PARALLEL_SAFE, TOOLS, execute_tool
 
 # ── Context window defaults ────────────────────────────────────────────
 
-DEFAULT_CONTEXT_WINDOW = 128_000
+DEFAULT_CONTEXT_WINDOW = 200_000
 _OUTPUT_RESERVE = 16_384  # max_tokens for audit/chat turns
 REPORT_OUTPUT_RESERVE = 65_536  # max_tokens for report generation (longer output)
 _SAFETY_MARGIN = 2_500

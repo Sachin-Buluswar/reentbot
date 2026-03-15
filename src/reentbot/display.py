@@ -42,7 +42,7 @@ class Display:
         lines = [
             f"[bold]Target:[/]  {source_dir}",
             f"[bold]Model:[/]   {model}",
-            f"[bold]Budget:[/]  {budget['max_tokens'] // 1000}k tokens | {budget['max_turns']} turns | {budget['max_time'] // 60} min | {budget.get('context_window', 128_000) // 1000}k context",
+            f"[bold]Budget:[/]  {budget['max_tokens'] // 1000}k tokens | {budget['max_turns']} turns | {budget['max_time'] // 60} min | {budget.get('context_window', 200_000) // 1000}k context",
             f"[bold]Capital:[/] ${budget.get('capital', 1000):,}",
         ]
         if rpc and rpc != "not set":

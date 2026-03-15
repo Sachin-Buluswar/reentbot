@@ -52,7 +52,7 @@ To uninstall: `uv tool uninstall reentbot`
 ```bash
 export OPENROUTER_API_KEY=sk-or-...          # Required
 export ETH_RPC_URL=https://eth-mainnet...    # Optional, enables on-chain queries
-export REENTBOT_MODEL=anthropic/claude-sonnet-4-20250514  # Optional
+export REENTBOT_MODEL=minimax/minimax-m2.5  # Optional
 ```
 
 ## Usage
@@ -64,12 +64,12 @@ If you used the development setup, prefix all commands below with `uv run` and r
 reentbot ./path/to/contracts
 
 # With options (skips wizard prompts for values provided)
-reentbot ./contracts --model anthropic/claude-sonnet-4-20250514 --max-time 1800 --capital 5000
+reentbot ./contracts --model minimax/minimax-m2.5 --max-time 1800 --capital 5000
 
 # Set token and turn budgets
 reentbot ./contracts --max-tokens 500000 --max-turns 50
 
-# Set context window to match your model (e.g., 200k for Claude Sonnet 4)
+# Set context window to match your model (e.g., 200k for MiniMax M2.5)
 reentbot ./contracts --context-window 200000
 
 # Skip interactive chat
@@ -114,7 +114,7 @@ Exploit contracts and test files written by the agent during the audit persist i
 | `--max-tokens` | 2,500,000 | Total token budget for the audit loop |
 | `--max-turns` | 500 | Maximum agent turns |
 | `--max-time` | 3600s | Wall-clock time limit |
-| `--context-window` | 128,000 | Model's context window size; controls conversation history retention |
+| `--context-window` | 200,000 | Model's context window size; controls conversation history retention |
 | Per-response (audit/chat) | 16,384 | Max output tokens per LLM response during audit and chat phases |
 | Per-response (report) | 65,536 | Max output tokens per LLM response during report generation |
 

@@ -85,7 +85,7 @@ def _interactive_setup(
     if model:
         config["model"] = model
     else:
-        m = console.input(f"\n  Model \\[[blue]{DEFAULT_MODEL}[/]]: ").strip()
+        m = console.input(f"\n  Model \\[[not bold blue]{DEFAULT_MODEL}[/]]: ").strip()
         config["model"] = m if m else DEFAULT_MODEL
 
     # Context window — the model's total context size
@@ -96,7 +96,7 @@ def _interactive_setup(
     else:
         cw_display = str(context_window)
     while True:
-        cw = console.input(f"\n  Model's context window \\[[blue]{cw_display}[/]]: ").strip()
+        cw = console.input(f"\n  Model's context window \\[[not bold blue]{cw_display}[/]]: ").strip()
         if not cw:
             config["context_window"] = context_window
             break
@@ -114,7 +114,7 @@ def _interactive_setup(
     else:
         capital_display = str(capital)
     while True:
-        c = console.input(f"\n  Attacker capital budget in USD \\[[blue]{capital_display}[/]]: ").strip()
+        c = console.input(f"\n  Attacker capital budget in USD \\[[not bold blue]{capital_display}[/]]: ").strip()
         if not c:
             config["capital"] = capital
             break
@@ -127,7 +127,7 @@ def _interactive_setup(
     # Max time
     time_min = max_time // 60
     while True:
-        t = console.input(f"\n  Max audit time in minutes \\[[blue]{time_min}[/]]: ").strip()
+        t = console.input(f"\n  Max audit time in minutes \\[[not bold blue]{time_min}[/]]: ").strip()
         if not t:
             config["max_time"] = max_time
             break
@@ -143,14 +143,14 @@ def _interactive_setup(
         break
 
     # Max tokens
-    if max_tokens >= 1_000_000 and max_tokens % 1_000_000 == 0:
-        tokens_display = f"{max_tokens // 1_000_000}M"
+    if max_tokens >= 1_000_000 and max_tokens % 100_000 == 0:
+        tokens_display = f"{max_tokens / 1_000_000:g}M"
     elif max_tokens >= 1_000 and max_tokens % 1_000 == 0:
         tokens_display = f"{max_tokens // 1_000}k"
     else:
         tokens_display = str(max_tokens)
     while True:
-        tk = console.input(f"\n  Max token budget \\[[blue]{tokens_display}[/]]: ").strip()
+        tk = console.input(f"\n  Max token budget \\[[not bold blue]{tokens_display}[/]]: ").strip()
         if not tk:
             config["max_tokens"] = max_tokens
             break
@@ -162,7 +162,7 @@ def _interactive_setup(
 
     # Max turns
     while True:
-        tr = console.input(f"\n  Max agent turns \\[[blue]{max_turns}[/]]: ").strip()
+        tr = console.input(f"\n  Max agent turns \\[[not bold blue]{max_turns}[/]]: ").strip()
         if not tr:
             config["max_turns"] = max_turns
             break
@@ -183,7 +183,7 @@ def _interactive_setup(
     else:
         while True:
             v = console.input(
-                f"\n  Tool output verbosity — off / partial / full \\[[blue]{default_verbosity}[/]]: "
+                f"\n  Tool output verbosity — off / partial / full \\[[not bold blue]{default_verbosity}[/]]: "
             ).strip().lower()
             if not v:
                 config["verbosity"] = default_verbosity
@@ -401,7 +401,7 @@ async def _run(
 )
 @click.option(
     "--context-window", default=DEFAULT_CONTEXT_WINDOW, type=int,
-    help="Model's context window size in tokens (default: 128k)",
+    help="Model's context window size in tokens (default: 200k)",
 )
 def main(source_dir, api_key, model, max_tokens, max_turns, max_time, output, image, rpc_url, capital, no_chat, verbosity, context_window):
     """Audit smart contracts for exploitable vulnerabilities."""
