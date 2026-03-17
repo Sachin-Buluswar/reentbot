@@ -88,6 +88,8 @@ cp -r ./my-protocol /tmp/audit-copy && reentbot /tmp/audit-copy
 
 The container always runs as `linux/amd64`, even on Apple Silicon Macs. This is because the Solidity compiler (`solc`) and related tools do not publish native Linux ARM64 binaries. On ARM64, tools like Foundry's `svm-rs` and `solc-select` fall back to WASM/Emscripten builds of solc, which run inside Node.js and hit memory limits on complex projects. Forcing amd64 ensures native x86_64 binaries are used via Docker's built-in emulation (QEMU or Rosetta 2). The emulation overhead is modest and far preferable to broken WASM compilation.
 
+The platform is enforced at two levels: the Dockerfile declares `FROM --platform=linux/amd64` to pin the base image and all layers, and `ensure_image()` builds via `docker buildx build --platform linux/amd64 --load` (subprocess) rather than the Python Docker SDK's `images.build()`. The SDK's `platform` parameter is unreliable for cross-platform builds on Apple Silicon — it can silently produce images with the host architecture. The `buildx` CLI with `--load` correctly sets image platform metadata. After building, the image architecture is verified before proceeding.
+
 ### On container initialization
 
 At startup, `_init_source()` in `docker.py` automatically initializes the workspace: configures git, initializes submodules, installs npm/yarn dependencies (if `package.json` exists), and installs `forge-std` (if `foundry.toml` exists and `forge-std` is missing). Each step is best-effort (`|| true`) — failures are silent and the agent handles any remaining issues during the audit.

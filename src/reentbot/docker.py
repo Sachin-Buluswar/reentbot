@@ -3,6 +3,7 @@
 import asyncio
 import io
 import os
+import subprocess
 import tarfile
 from pathlib import Path
 
@@ -63,16 +64,40 @@ class AuditContainer:
             )
 
         def _build():
-            _, logs = client.images.build(
-                path=str(dockerfile_path.parent),
-                dockerfile=dockerfile_path.name,
-                tag=self.image_name,
-                rm=True,
-                platform=PLATFORM,
+            result = subprocess.run(
+                [
+                    "docker", "buildx", "build",
+                    "--platform", PLATFORM,
+                    "--load",
+                    "-t", self.image_name,
+                    "-f", str(dockerfile_path),
+                    str(dockerfile_path.parent),
+                ],
+                capture_output=True,
+                text=True,
             )
-            return logs
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"Docker image build failed:\n{result.stderr}"
+                )
 
         await asyncio.to_thread(_build)
+
+        # Verify the built image has the correct architecture.
+        try:
+            img = client.images.get(self.image_name)
+        except ImageNotFound:
+            raise RuntimeError(
+                "Docker image build completed but image was not found. "
+                "This may indicate an issue with 'docker buildx build --load'."
+            )
+        if img.attrs.get("Architecture") != "amd64":
+            raise RuntimeError(
+                f"Docker image build completed but produced "
+                f"'{img.attrs.get('Architecture')}' architecture instead of 'amd64'. "
+                f"Ensure Docker Desktop has cross-platform build support enabled."
+            )
+
         if on_status:
             on_status("Image built successfully")
 
@@ -107,7 +132,6 @@ class AuditContainer:
                 working_dir="/audit",
                 # Network access enabled for cast/anvil/forge install
                 network_mode="bridge",
-                platform=PLATFORM,
             )
             return container
 
