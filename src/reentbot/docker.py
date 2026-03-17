@@ -9,6 +9,11 @@ from pathlib import Path
 import docker as docker_lib
 from docker.errors import ImageNotFound, NotFound, APIError
 
+# Always build and run as linux/amd64.  The Solidity toolchain does not publish
+# native Linux ARM64 binaries — on Apple Silicon this causes fallback to WASM
+# solc builds that hit memory limits and produce unreliable results.
+PLATFORM = "linux/amd64"
+
 
 class AuditContainer:
     """Manages the Docker container lifecycle for an audit run."""
@@ -31,13 +36,18 @@ class AuditContainer:
         return self._docker
 
     async def ensure_image(self, on_status=None) -> None:
-        """Build the Docker image if it doesn't exist."""
+        """Build the Docker image if it doesn't exist or has wrong architecture."""
         client = self._get_client()
         try:
-            client.images.get(self.image_name)
+            img = client.images.get(self.image_name)
+            if img.attrs.get("Architecture") == "amd64":
+                if on_status:
+                    on_status("Image found (cached)")
+                return
+            # Wrong architecture (e.g. arm64 from before platform enforcement).
+            # Rebuilding with the same tag replaces the old image.
             if on_status:
-                on_status("Image found (cached)")
-            return
+                on_status("Cached image is not amd64 — rebuilding...")
         except ImageNotFound:
             pass
 
@@ -58,6 +68,7 @@ class AuditContainer:
                 dockerfile=dockerfile_path.name,
                 tag=self.image_name,
                 rm=True,
+                platform=PLATFORM,
             )
             return logs
 
@@ -90,12 +101,13 @@ class AuditContainer:
                 },
                 tmpfs={"/workspace": "size=1G"},
                 environment=env_vars,
-                mem_limit="4g",
+                mem_limit="8g",
                 cpu_period=100000,
                 cpu_quota=200000,
                 working_dir="/audit",
                 # Network access enabled for cast/anvil/forge install
                 network_mode="bridge",
+                platform=PLATFORM,
             )
             return container
 
@@ -105,7 +117,7 @@ class AuditContainer:
             on_status("Container ready")
 
     async def _init_source(self, on_status=None) -> None:
-        """Initialize git repo state in the mounted source directory."""
+        """Initialize the mounted source: git config, submodules, and dependencies."""
         # Ensure git trusts the bind-mounted directory (ownership differs
         # between host user and container root).  Redundant with the
         # Dockerfile config but needed for cached / older images.
@@ -121,6 +133,35 @@ class AuditContainer:
             await self.exec(
                 "git submodule update --init --recursive 2>/dev/null || true",
                 timeout=120,
+            )
+
+        # Install npm/yarn dependencies if package.json exists.
+        exit_code, _ = await self.exec("[ -f package.json ]", timeout=5)
+        if exit_code == 0:
+            if on_status:
+                on_status("Installing npm dependencies...")
+            yarn_check, _ = await self.exec("[ -f yarn.lock ]", timeout=5)
+            if yarn_check == 0:
+                await self.exec(
+                    "yarn install 2>/dev/null || true", timeout=120
+                )
+            else:
+                await self.exec(
+                    "npm install 2>/dev/null || true", timeout=120
+                )
+
+        # Install forge-std if this is a Foundry project and forge-std is missing.
+        # The agent needs forge-std to write custom Foundry tests and PoC exploits.
+        exit_code, _ = await self.exec(
+            "[ -d .git ] && [ -f foundry.toml ] && [ ! -d lib/forge-std ]",
+            timeout=5,
+        )
+        if exit_code == 0:
+            if on_status:
+                on_status("Installing forge-std...")
+            await self.exec(
+                "forge install foundry-rs/forge-std --no-commit 2>/dev/null || true",
+                timeout=60,
             )
 
     async def exec(

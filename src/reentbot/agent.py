@@ -311,13 +311,17 @@ def _truncate_messages(
             note_parts.append(explored_summary)
         note_parts.append(
             "Continue your analysis. Do not re-investigate submitted findings "
-            "unless you have new information.]"
+            "unless you have new information. "
+            "If you maintained a scratchpad at /workspace/notes.md, "
+            "read it now to recover your analysis state.]"
         )
         note_content = "\n".join(note_parts)
     else:
         note_content = (
             "[System: Earlier conversation was truncated to fit context window. "
-            "No findings submitted yet. Continue your analysis.]"
+            "No findings submitted yet. Continue your analysis. "
+            "If you maintained a scratchpad at /workspace/notes.md, "
+            "read it now to recover your analysis state.]"
         )
     truncation_note = [{"role": "user", "content": note_content}]
 

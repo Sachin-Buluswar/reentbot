@@ -50,6 +50,7 @@ Configuration priority (highest to lowest): CLI flags → environment variables 
 - **Reasoning:** `off` (default), `low`, `medium`, `high` (configurable via `--reasoning`). Controls thinking depth for models that support extended reasoning. Higher levels significantly increase token usage — output tokens are multiplied by 1.3x/2x/5x respectively to preserve the content budget while allocating space for reasoning. Output is capped at 128k tokens per call and at half the context window to prevent overflow. Reasoning display follows the verbosity setting: `off` hides it, `partial` shows a thinking indicator and token count, `full` streams all reasoning content. Silently ignored for models without reasoning support.
 - **Output directory:** `./findings` (configurable via `--output`). Each run creates a timestamped subdirectory.
 - **Docker image name:** `reentbot-tools` (configurable via `--image`).
+- **Docker platform:** Always `linux/amd64`, even on ARM64 hosts. Container memory limit is 8 GB. See architecture notes below.
 - **Skip chat:** `--no-chat` flag skips the interactive chat phase after the report.
 
 ---
@@ -82,3 +83,11 @@ If the user wants isolation, they can copy the source directory first:
 ```
 cp -r ./my-protocol /tmp/audit-copy && reentbot /tmp/audit-copy
 ```
+
+### On forcing `linux/amd64`
+
+The container always runs as `linux/amd64`, even on Apple Silicon Macs. This is because the Solidity compiler (`solc`) and related tools do not publish native Linux ARM64 binaries. On ARM64, tools like Foundry's `svm-rs` and `solc-select` fall back to WASM/Emscripten builds of solc, which run inside Node.js and hit memory limits on complex projects. Forcing amd64 ensures native x86_64 binaries are used via Docker's built-in emulation (QEMU or Rosetta 2). The emulation overhead is modest and far preferable to broken WASM compilation.
+
+### On container initialization
+
+At startup, `_init_source()` in `docker.py` automatically initializes the workspace: configures git, initializes submodules, installs npm/yarn dependencies (if `package.json` exists), and installs `forge-std` (if `foundry.toml` exists and `forge-std` is missing). Each step is best-effort (`|| true`) — failures are silent and the agent handles any remaining issues during the audit.
