@@ -3,6 +3,7 @@
 import asyncio
 import io
 import os
+import shlex
 import subprocess
 import tarfile
 from pathlib import Path
@@ -23,6 +24,7 @@ class AuditContainer:
         self.image_name = image_name
         self._docker: docker_lib.DockerClient | None = None
         self._container = None
+        self.init_report: list[str] = []
 
     def _get_client(self) -> docker_lib.DockerClient:
         if self._docker is None:
@@ -141,52 +143,238 @@ class AuditContainer:
             on_status("Container ready")
 
     async def _init_source(self, on_status=None) -> None:
-        """Initialize the mounted source: git config, submodules, and dependencies."""
-        # Ensure git trusts the bind-mounted directory (ownership differs
-        # between host user and container root).  Redundant with the
-        # Dockerfile config but needed for cached / older images.
+        """Initialize the mounted source: git, submodules, and dependencies.
+
+        Does minimal setup and reports results honestly.  The agent handles
+        any remaining dependency issues — it's better at diagnosing problems
+        than brittle init code.
+
+        Collects status lines in self.init_report for the agent's first turn.
+        """
+        report: list[str] = []
+
+        # ── 1. Ensure a git repo exists ──
+        # Many Solidity tools (forge, slither) need git to function.  If the
+        # source was downloaded as a ZIP archive, create a lightweight repo.
+        exit_code, _ = await self.exec("[ -d .git ]", timeout=5)
+        if exit_code != 0:
+            if on_status:
+                on_status("Initializing git repository...")
+            # Split init from commit — git init + add is fast and ensures
+            # tooling works.  The commit may be slow on large repos.
+            await self.exec(
+                "git init -q && git add -A 2>/dev/null || true",
+                timeout=30,
+            )
+            await self.exec(
+                "git commit -q -m 'init' 2>/dev/null || true",
+                timeout=120,
+            )
+            report.append("Git repo: initialized (no prior .git directory)")
+        else:
+            report.append("Git repo: existing")
+
+        # ── 2. Git config ──
+        # Trust bind-mounted repos (host UID ≠ container root).
         await self.exec(
             "git config --global --add safe.directory '*'", timeout=5
         )
-        # Initialize git submodules if present — Foundry projects store
-        # dependencies (OpenZeppelin, forge-std, etc.) as submodules in lib/.
+        # Rewrite SSH URLs to HTTPS — the container has no SSH keys, so
+        # git@github.com: URLs (common in .gitmodules) would fail.
+        await self.exec(
+            "git config --global url.'https://github.com/'.insteadOf "
+            "'git@github.com:'",
+            timeout=5,
+        )
+
+        # ── 3. Detect project root ──
+        project_root = await self._find_project_root()
+        report.append(f"Project root: {project_root}")
+
+        # ── 4. Submodules — one attempt, report honestly ──
         exit_code, _ = await self.exec("[ -f .gitmodules ]", timeout=5)
         if exit_code == 0:
             if on_status:
                 on_status("Initializing git submodules...")
-            await self.exec(
-                "git submodule update --init --recursive 2>/dev/null || true",
+            exit_code, output = await self.exec(
+                "git submodule update --init --recursive 2>&1",
                 timeout=120,
             )
-
-        # Install npm/yarn dependencies if package.json exists.
-        exit_code, _ = await self.exec("[ -f package.json ]", timeout=5)
-        if exit_code == 0:
-            if on_status:
-                on_status("Installing npm dependencies...")
-            yarn_check, _ = await self.exec("[ -f yarn.lock ]", timeout=5)
-            if yarn_check == 0:
-                await self.exec(
-                    "yarn install 2>/dev/null || true", timeout=120
-                )
+            if exit_code == 0:
+                report.append("Submodules: initialized")
             else:
-                await self.exec(
-                    "npm install 2>/dev/null || true", timeout=120
+                report.append(
+                    f"Submodules: git submodule update FAILED (exit {exit_code})"
+                )
+            # Report which submodule directories are empty so the agent
+            # knows exactly what needs fixing.
+            empty = await self._list_empty_submodules()
+            if empty:
+                report.append(
+                    "Empty submodule dirs (need manual install): "
+                    + ", ".join(empty)
                 )
 
-        # Install forge-std if this is a Foundry project and forge-std is missing.
-        # The agent needs forge-std to write custom Foundry tests and PoC exploits.
+        # ── 5. Install node dependencies ──
         exit_code, _ = await self.exec(
-            "[ -d .git ] && [ -f foundry.toml ] && [ ! -d lib/forge-std ]",
+            f"[ -f {project_root}/package.json ]", timeout=5
+        )
+        if exit_code == 0:
+            dep_line = await self._install_node_deps(
+                project_root, on_status=on_status
+            )
+            report.append(dep_line)
+
+        # ── 6. Install forge-std if needed ──
+        exit_code, _ = await self.exec(
+            f"[ -d .git ] && [ -f {project_root}/foundry.toml ] "
+            f"&& [ ! -d {project_root}/lib/forge-std ]",
             timeout=5,
         )
         if exit_code == 0:
             if on_status:
                 on_status("Installing forge-std...")
-            await self.exec(
-                "forge install foundry-rs/forge-std --no-commit 2>/dev/null || true",
+            exit_code, output = await self.exec(
+                "forge install foundry-rs/forge-std --no-commit 2>&1",
+                working_dir=project_root,
                 timeout=60,
             )
+            if exit_code == 0:
+                report.append("forge-std: installed")
+            else:
+                report.append(f"forge-std: install failed (exit {exit_code})")
+
+        self.init_report = report
+
+    async def _list_empty_submodules(self) -> list[str]:
+        """List submodule paths from .gitmodules that are missing or empty."""
+        exit_code, output = await self.exec(
+            "git config -f .gitmodules "
+            "--get-regexp 'submodule\\..*\\.path' 2>/dev/null",
+            timeout=10,
+        )
+        if exit_code != 0 or not output.strip():
+            return []
+
+        empty: list[str] = []
+        for line in output.strip().splitlines():
+            parts = line.split(None, 1)
+            if len(parts) != 2:
+                continue
+            sub_path = parts[1]
+            safe = shlex.quote(f"/audit/{sub_path}")
+            ec, _ = await self.exec(
+                f'[ -d {safe} ] && [ "$(ls -A {safe} 2>/dev/null)" ]',
+                timeout=5,
+            )
+            if ec != 0:
+                empty.append(sub_path)
+
+        return empty
+
+    async def _install_node_deps(
+        self, project_root: str, on_status=None
+    ) -> str:
+        """Install Node.js dependencies using the appropriate package manager.
+
+        Searches for lock files at both the project root and /audit (monorepos
+        may keep the lock file at the repo root).  Tries frozen install first,
+        then falls back to unfrozen.  Returns a status line for the init report.
+        """
+        if on_status:
+            on_status("Installing node dependencies...")
+
+        # Detect package manager by lock file presence.
+        search_dirs = [project_root]
+        if project_root != "/audit":
+            search_dirs.append("/audit")
+
+        pm: str | None = None
+        install_dir = project_root
+        for d in search_dirs:
+            for lockfile, manager in [
+                ("pnpm-lock.yaml", "pnpm"),
+                ("yarn.lock", "yarn"),
+                ("package-lock.json", "npm"),
+            ]:
+                ec, _ = await self.exec(
+                    f"[ -f {d}/{lockfile} ]", timeout=5
+                )
+                if ec == 0:
+                    pm = manager
+                    install_dir = d
+                    break
+            if pm:
+                break
+
+        if pm is None:
+            pm = "npm"
+
+        # Build install commands (frozen first, then unfrozen fallback)
+        if pm == "pnpm":
+            frozen = "pnpm install --frozen-lockfile 2>&1"
+            unfrozen = "pnpm install 2>&1"
+        elif pm == "yarn":
+            frozen = "yarn install --frozen-lockfile 2>&1"
+            unfrozen = "yarn install 2>&1"
+        else:
+            frozen = "npm ci 2>&1"
+            unfrozen = "npm install 2>&1"
+
+        exit_code, output = await self.exec(
+            frozen, working_dir=install_dir, timeout=120
+        )
+        if exit_code == 0:
+            return f"Dependencies: {pm} install succeeded"
+
+        # Frozen install failed — try unfrozen
+        exit_code, output = await self.exec(
+            unfrozen, working_dir=install_dir, timeout=120
+        )
+        if exit_code == 0:
+            return (
+                f"Dependencies: {pm} install succeeded "
+                "(frozen failed, used unfrozen)"
+            )
+
+        # Both failed
+        lines = output.strip().splitlines()
+        tail = "\n".join(lines[-5:]) if lines else "no output"
+        return f"Dependencies: {pm} install FAILED — {tail}"
+
+    async def _find_project_root(self) -> str:
+        """Detect the Solidity project root inside the mounted source.
+
+        Looks for foundry.toml or hardhat config up to 3 levels deep,
+        preferring the shallowest match.  Falls back to /audit.
+        """
+        # Check /audit itself first (most common case).
+        exit_code, _ = await self.exec("[ -f /audit/foundry.toml ]", timeout=5)
+        if exit_code == 0:
+            return "/audit"
+
+        # Search subdirectories for foundry.toml.
+        exit_code, found = await self.exec(
+            "find /audit -maxdepth 3 -name foundry.toml "
+            "-not -path '*/node_modules/*' -not -path '*/lib/*' "
+            "2>/dev/null | head -1",
+            timeout=10,
+        )
+        if exit_code == 0 and found.strip():
+            return found.strip().rsplit("/foundry.toml", 1)[0] or "/audit"
+
+        # Fall back to hardhat config.
+        exit_code, found = await self.exec(
+            "find /audit -maxdepth 3 "
+            "\\( -name 'hardhat.config.js' -o -name 'hardhat.config.ts' \\) "
+            "-not -path '*/node_modules/*' "
+            "2>/dev/null | head -1",
+            timeout=10,
+        )
+        if exit_code == 0 and found.strip():
+            return found.strip().rsplit("/", 1)[0] or "/audit"
+
+        return "/audit"
 
     async def exec(
         self, command: str, working_dir: str = "/audit", timeout: int = 120

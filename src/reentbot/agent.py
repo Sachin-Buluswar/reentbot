@@ -36,6 +36,22 @@ _REASONING_MULTIPLIERS = {
 # at "high" would be 65k*5 = 327k without this cap).
 _MAX_OUTPUT_TOKENS = 128_000
 
+# Maximum consecutive responses truncated by max_tokens before giving up.
+# When the model's output is cut off mid-tool-call (finish_reason="length"),
+# we nudge it to retry with shorter reasoning.  After this many failures we
+# accept termination.
+_MAX_TRUNCATION_RETRIES = 3
+
+# Floor for minimum audit turns.  Actual minimum is 10% of max_turns or
+# this value, whichever is larger.  Prevents premature termination when
+# the model gives up after a single error (e.g. failed compilation)
+# instead of diagnosing and recovering.
+_MIN_AUDIT_TURNS_FLOOR = 10
+
+# Maximum consecutive early-stop nudges before accepting termination, to
+# prevent infinite nudge loops when the model refuses to continue.
+_MAX_EARLY_STOP_NUDGES = 3
+
 
 def _adjusted_output_reserve(base: int, reasoning_effort: str | None) -> int:
     """Adjust output token reserve for reasoning overhead."""
@@ -384,11 +400,15 @@ async def run_audit(
     prior_findings: list[dict] | None = None,
     max_context: int = calculate_max_context(DEFAULT_CONTEXT_WINDOW),
     reasoning_config: dict | None = None,
+    init_report: str | None = None,
 ) -> tuple[list[dict], list[dict], dict]:
     """
     Run the audit agent loop.
     Returns (findings, messages, explored) — findings list, conversation
     history, and explored state (files read, tools run).
+
+    If init_report is provided, it is injected as the first user message
+    so the agent starts with full visibility into container setup status.
 
     If prior_findings is provided (e.g. from a previous audit via keep-auditing),
     a summary is injected at the start so the agent knows what was already
@@ -399,6 +419,16 @@ async def run_audit(
     via calculate_max_context(), or overridden via --context-window.
     """
     messages = [{"role": "system", "content": system_prompt}]
+
+    # Inject container initialization report so the agent starts with
+    # full visibility into what succeeded/failed during setup.
+    if init_report:
+        messages.append({
+            "role": "user",
+            "content": (
+                "[Container initialization report]\n" + init_report
+            ),
+        })
 
     # On resumed audits, tell the agent what was already found
     if prior_findings:
@@ -423,6 +453,9 @@ async def run_audit(
     budget_warned_95 = False
     wrap_up_requested = False
     wrap_up_injected = False  # ensures wrap-up message is only injected once
+    consecutive_truncations = 0
+    early_stop_nudges = 0
+    min_audit_turns = max(_MIN_AUDIT_TURNS_FLOOR, max_turns // 10)
 
     # Signal handling for graceful shutdown
     shutdown_count = 0
@@ -507,7 +540,7 @@ async def run_audit(
 
             # Call LLM (streaming)
             try:
-                response_message, tokens, r_tokens = await _stream_turn(
+                response_message, tokens, r_tokens, finish_reason = await _stream_turn(
                     client, model, messages, display,
                     reasoning_config=reasoning_config,
                 )
@@ -518,7 +551,7 @@ async def run_audit(
                     display.error(f"LLM call failed ({e}), retrying ({attempt + 1}/3)...")
                     await asyncio.sleep(2 ** attempt)
                     try:
-                        response_message, tokens, r_tokens = await _stream_turn(
+                        response_message, tokens, r_tokens, finish_reason = await _stream_turn(
                             client, model, messages, display,
                             reasoning_config=reasoning_config,
                         )
@@ -534,10 +567,55 @@ async def run_audit(
             reasoning_tokens_used += r_tokens
             messages.append(response_message)
 
-            # If no tool calls, agent is done
+            # If no tool calls, check whether it was intentional or truncation
             if not response_message.get("tool_calls"):
+                if (finish_reason == "length"
+                        and consecutive_truncations < _MAX_TRUNCATION_RETRIES):
+                    # Response was truncated by max_tokens — the model likely
+                    # started tool calls but they were cut off.  Nudge it to
+                    # retry with shorter output.
+                    consecutive_truncations += 1
+                    display.error(
+                        f"Response truncated, retrying "
+                        f"({consecutive_truncations}/{_MAX_TRUNCATION_RETRIES})..."
+                    )
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "Your last response was cut off (hit the output "
+                            "token limit) before you could include tool calls. "
+                            "Keep your reasoning very brief and emit your next "
+                            "tool call immediately."
+                        ),
+                    })
+                    continue
+                # Early-termination guard: reject premature stops
+                if (turn < min_audit_turns
+                        and early_stop_nudges < _MAX_EARLY_STOP_NUDGES
+                        and not wrap_up_requested):
+                    early_stop_nudges += 1
+                    display.error(
+                        f"Agent tried to stop at turn {turn}/{min_audit_turns} "
+                        f"(nudge {early_stop_nudges}/{_MAX_EARLY_STOP_NUDGES})"
+                    )
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "The audit has barely started — do not stop. "
+                            "If compilation failed, diagnose the dependency issue: "
+                            "try forge install, check for missing submodules, or "
+                            "use run_command to manually clone missing libraries. "
+                            "If you truly cannot compile, perform manual code review "
+                            "using read_file and search_code — you can still find "
+                            "vulnerabilities by reading the source. Continue."
+                        ),
+                    })
+                    continue
                 display.agent_done()
                 break
+            else:
+                consecutive_truncations = 0  # reset on successful tool call
+                early_stop_nudges = 0
 
             # Execute tool calls
             tool_results = await _execute_tool_calls(
@@ -562,10 +640,12 @@ async def _stream_turn(
     display: Display,
     max_tokens: int = _OUTPUT_RESERVE,
     reasoning_config: dict | None = None,
-) -> tuple[dict, int, int]:
+) -> tuple[dict, int, int, str | None]:
     """Make one streaming LLM call.
 
-    Returns (assistant_message, total_token_count, reasoning_token_count).
+    Returns (assistant_message, total_token_count, reasoning_token_count,
+    finish_reason).  finish_reason is "stop", "length", "tool_calls", or
+    None if the API didn't report it.
     """
     # Adjust max_tokens for reasoning overhead
     effort = reasoning_config.get("effort") if reasoning_config else None
@@ -594,6 +674,7 @@ async def _stream_turn(
     reasoning_active = False
     usage_tokens = 0
     reasoning_token_count = 0
+    finish_reason: str | None = None
 
     async for chunk in stream:
         if not chunk.choices:
@@ -606,6 +687,10 @@ async def _stream_turn(
             continue
 
         delta = chunk.choices[0].delta
+
+        # Capture finish_reason from the final chunk
+        if chunk.choices[0].finish_reason:
+            finish_reason = chunk.choices[0].finish_reason
 
         # ── Reasoning (structured takes priority over simple) ──
         raw_reasoning = getattr(delta, "reasoning_details", None)
@@ -723,7 +808,7 @@ async def _stream_turn(
     if reasoning_text:
         msg["reasoning"] = reasoning_text
 
-    return msg, usage_tokens, reasoning_token_count
+    return msg, usage_tokens, reasoning_token_count, finish_reason
 
 
 async def _execute_tool_calls(
@@ -834,7 +919,7 @@ async def run_report(
     for _ in range(10):
         messages = _truncate_messages(messages, findings, explored, max_context)
         try:
-            response_message, _, _ = await _stream_turn(
+            response_message, _, _, _ = await _stream_turn(
                 client, model, messages, display,
                 max_tokens=REPORT_OUTPUT_RESERVE,
                 reasoning_config=reasoning_config,
@@ -932,7 +1017,7 @@ async def chat_loop(
         for _ in range(20):  # Safety limit per chat turn
             messages = _truncate_messages(messages, findings, explored, max_context)
             try:
-                response_message, _, _ = await _stream_turn(
+                response_message, _, _, _ = await _stream_turn(
                     client, model, messages, display,
                     reasoning_config=reasoning_config,
                 )

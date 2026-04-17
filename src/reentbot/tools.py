@@ -327,6 +327,13 @@ def _truncate(text: str, max_chars: int = 50000) -> str:
 # ── Individual tool implementations ─────────────────────────────────────
 
 
+_FIND_PRUNE_NAMES = (
+    ".git", "node_modules", "out", "artifacts", "cache",
+    "build", "coverage", "typechain", "typechain-types",
+    ".next", "dist",
+)
+
+
 async def _list_files(container: AuditContainer, args: dict) -> str:
     path = args.get("path", "/audit")
     depth = min(args.get("depth", 10), 10)
@@ -339,9 +346,16 @@ async def _list_files(container: AuditContainer, args: dict) -> str:
             f"ls -la {shlex.quote(path)} 2>&1", timeout=10
         )
     else:
-        # Recursive tree-style listing for depth > 1
+        # Recursive listing.  Prune common noise directories (node_modules,
+        # build artifacts, etc.) so the listing shows project structure, not
+        # dependency trees.  Pruned directory entries are still printed; only
+        # their contents are suppressed.
+        prune_expr = " -o ".join(
+            f"-name {shlex.quote(d)}" for d in _FIND_PRUNE_NAMES
+        )
         exit_code, output = await container.exec(
-            f"find {shlex.quote(path)} -maxdepth {depth} -not -path '*/\\.git/*' "
+            f"find {shlex.quote(path)} -maxdepth {depth} "
+            f"\\( {prune_expr} \\) \\( -prune -print \\) -o -print "
             f"| sort 2>&1",
             timeout=30,
         )

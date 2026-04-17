@@ -320,7 +320,13 @@ async def _run(
         await container.start(source_dir, rpc_url=rpc_url, on_status=display.status)
 
         # Build system prompt
-        system_prompt = build_system_prompt(capital_usd=capital)
+        system_prompt = build_system_prompt(capital_usd=capital, max_turns=max_turns)
+
+        # Collect init report for the agent's first message
+        init_report = (
+            "\n".join(container.init_report)
+            if container.init_report else None
+        )
 
         # ── Audit phase ──
         display.phase("Audit Phase")
@@ -335,6 +341,7 @@ async def _run(
             max_time_seconds=max_time,
             max_context=max_context,
             reasoning_config=reasoning_config,
+            init_report=init_report,
         )
 
         # ── Report phase ──

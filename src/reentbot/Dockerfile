@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ── Node.js (for Hardhat/Truffle projects) ──
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
-    && npm install -g yarn \
+    && npm install -g yarn pnpm \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Solidity: solc-select ──
@@ -46,7 +46,7 @@ RUN ARCH=$(dpkg --print-architecture) && \
 
 # ── Go (needed for Medusa) ──
 RUN ARCH=$(dpkg --print-architecture) && \
-    wget --tries=3 --waitretry=10 -O /tmp/go.tar.gz "https://go.dev/dl/go1.24.5.linux-${ARCH}.tar.gz" \
+    wget --tries=3 --waitretry=10 -O /tmp/go.tar.gz "https://go.dev/dl/go1.24.13.linux-${ARCH}.tar.gz" \
     && tar xz -C /usr/local -f /tmp/go.tar.gz \
     && rm /tmp/go.tar.gz
 ENV PATH="/usr/local/go/bin:/root/go/bin:${PATH}"
