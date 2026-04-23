@@ -69,7 +69,7 @@ reentbot ./contracts --model minimax/minimax-m2.7 --max-time 1800 --capital 5000
 # Set token and turn budgets
 reentbot ./contracts --max-tokens 500000 --max-turns 50
 
-# Set context window to match your model (e.g., 200k for MiniMax M2.5)
+# Set context window to match your model (e.g., 200k for MiniMax M2.7)
 reentbot ./contracts --context-window 200000
 
 # Skip interactive chat
